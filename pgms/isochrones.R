@@ -1,8 +1,15 @@
 # Documentation  postgis: http://postgis.net/
+# Installer le package osrm si besoin
+if(!"osrm" %in% rownames(installed.packages())) install.packages("osrm")
 
+library(DBI)
+library(RPostgres)
 library(sf)
 library(osrm)
 library(leaflet)
+library(dplyr)
+
+# 0- Connexion à la base données et exploration rapide
 
 connecter <- function(user, password){
   nom <- "db_tpcarto"
@@ -14,14 +21,63 @@ connecter <- function(user, password){
 
 conn <- connecter(user, password)
 
-query <- "SET search_path TO public;"
-dbSendQuery(conn, query)
+dbListTables(conn) # liste des tables présentes dans la bdd (certaines sont des tables gérées par le SGBD)
+dbListFields(conn, "bpe21_metro") # les colonnes de la table bpe21_metro
 
-sf_reg_metro <- st_read("tutos_R/postgis/reg_francemetro_2021.gpkg")
+# Pour interagir avec la base il suffit d'envoyer des requêtes SQL
+# Par exemple, récupérer la table des équipements du département de la Manche (50):
+bpe_dep50 <- dbGetQuery(conn, statement = "SELECT ID, DEPCOM, DOM, SDOM, TYPEQU FROM bpe21_metro WHERE DEP='50';")
+str(bpe_dep50) # On récupère le dataframe avec les lignes et colonnes voulues
+# ATTENTION, si on souhaite récupérer non pas un dataframe mais une data+géométrie, on pourrait faire:
+bpe_dep50 <- dbGetQuery(conn, statement = "SELECT ID, DEPCOM, DOM, SDOM, TYPEQU, GEOMETRY FROM bpe21_metro WHERE DEP='50';")
+str(bpe_dep50) # Mais les données sont récupérées sous forme d'un dataframe dont la géométrie n'est considérée comme une variable comme une autre
+# POUR RECUPERER UN OBJET SPATIAL, il faut passer par la fonction d'importation de sf
+bpe_dep50 <- st_read(conn, query = "SELECT ID, DEPCOM, DOM, SDOM, TYPEQU, GEOMETRY FROM bpe21_metro WHERE DEP='50';")
+str(bpe_dep50) #il s'agit bien d'un objet sf et data.frame désormais sur lesquels les fonctions sf déjà vues dans les autres TP seront fonctionnelles.
+
+plot(bpe_dep50 %>% select(dom),  cex = 0.3, pch = 16)
+
+
+# RQ: Bien entendu, il est possible d'importer la table entière et de la manipuler sur R avec sf et dplyr 
+# mais au risque d'une perte de performance. Comparons sur la bpe21_metro (qui n'est pas très grosse) et sur une opération de filtrage simple
+system.time({
+  bpe_dep50 <- st_read(conn, query = "SELECT ID, DEPCOM, DOM, SDOM, TYPEQU, GEOMETRY FROM bpe21_metro WHERE DEP='50';")
+})
+# user  system elapsed 
+# 0.142   0.003   0.260
+
+system.time({
+  bpe_dep50 <- st_read(conn, query = "SELECT * FROM bpe21_metro;") %>% 
+    filter(dep == "50") %>% 
+    select(id, depcom, dom, sdom, typequ)
+})
+# user  system elapsed 
+# 32.265   1.887  34.132 
+# Ce qui est long ici c'est notamment le temps d'importation de la base complète
+
+# 
+dbGetQuery(conn, "SELECT COUNT(id) FROM BPE21_metro;") # 2326287
+
+# Pour s'exercer à la manipulation de base (SQL)
+
+# i- Charger la table regions_metro dans R et afficher la carte des régions métropolitaines (simple plot)
+
+regions_metro <- st_read(conn, query = "SELECT * FROM regions_metro;")
 str(sf_reg_metro)
 plot(st_geometry(sf_reg_metro))
 
-# 0- Manipuler la base de données des équipements
+# ii- Déterminer le système de projection de la table bpe21_04 (La Réunion) de deux façons différentes
+# 1ere façon avec la fonction sf::st_crs
+st_read(conn, query = "SELECT * FROM bpe21_04") %>% st_crs() #2975 (UTM40S)
+#2nde façon avec la fonction POSTGIS ST_SRID(colonne géométrie) => renvoie le crs de chaque élément
+dbGetQuery(conn, "SELECT DISTINCT(ST_SRID(geometry)) FROM bpe21_04;")
+# ou fonction Find_SRID(nom du schema, nom de la table, nom de la colonne géométrie);"
+dbGetQuery(conn, "SELECT Find_SRID('public','regions_metro', 'geometry');") # ici 0
+
+# TODO - trouver d'autres exercices assez simples pour manipuler le SQL, le sf voire du postgis
+
+
+# A- Manipuler la base de données des équipements
 # a- Dénombrer les maternités TYPEQU='D107' par région et trier par ordre décroissant de deux façons différentes
 # On pourra remarquer qu'une façon est beaucoup plus rapide
 
@@ -47,6 +103,30 @@ system.time({
 # On pourra utiliser les coordoonnées (long,lat) suivantes (lat = 48.84864, long = 2.34297) pour situer La Sorbonne.
 # On prendra soin de vérifier le système de projection de la bpe.
 
+# 1ere façon: principalement avec sf
+# On filtre la bpe en SQL
+cinemas_bpe <- sf::st_read(conn, query = "SELECT * FROM bpe21_metro WHERE TYPEQU='F303';")
+str(cinemas_bpe)
+# Le reste des opérations notamment les opérations géométriques sont réalisés avec sf sur R
+
+# On construit un buffer de 1km (une zone tampon) autour de la sorbonne
+sorbonne_buffer <- data.frame(x=2.34297,y=48.84864) %>% # df des coordonnées 
+  st_as_sf(coords = c("x","y"), crs = 4326) %>% #qu'on transforme en objet sf (systeme de proj WGS84 => crs=4326)
+  st_transform(2154) %>% # on reprojette en LAMBERT-93 (crs=2154)
+  st_buffer(1000) # on crée la zone tampon autour du point (l'unité est le mètre ici)
+
+str(sorbonne_buffer) # le buffer est constitué d'un unique polygône
+plot(sorbonne_buffer %>% st_geometry()) # qui s'avère être un cercle
+
+# On détermine si chaque cinéma de la bpe  appartient ou non au buffer avec la fonction st_within
+cinema_1km_sorbonne_list <- st_within(cinemas_bpe, sorbonne_buffer) # on obtient une liste
+# str(cinema_1km_sorbonne_list)
+cinema_1km_sorbonne <- cinemas_bpe %>% filter(lengths(cinema_1km_sorbonne_list)>0)
+cinema_1km_sorbonne %>% nrow() #21 cinémas
+
+
+# 2nde façon: travailler en SQL avec POSTGIS
+
 # Le système de projection d'une base postgis peut se retrouver avec la fonction Find_SRID
 # qui prend trois arguments: le nom du schéma (ici public), le nom de la table et le nom de la colonne de la table correspondant à la géométrie.
 (crs_bpe <- dbGetQuery(conn, "SELECT Find_SRID('public','bpe21_metro', 'geometry');"))
@@ -57,13 +137,11 @@ system.time({
 sorbonne <- "ST_GeomFromText('POINT(2.34297 48.84864)', 4326)"
 # et le reprojeter en Lambert-93. 
 sorbonne <- paste0("ST_Transform(", sorbonne, ", 2154)")
-
 # Autour de la Sorbonne on crée un buffer cad une zone tampon (ici un disque de diamètre 1km)
 sorbonne_buffer <- paste0("ST_Buffer(", sorbonne ,", 1000)")
 
 # On peut dès lors écrire la requête avec l'instruction ST_WITHIN
 # ST_within(A,B) indique si une géométrie A (ici nos points de la BPE) appartient à une géométrie B (ici notre buffer)
-
 query <- paste0(
   "SELECT bpe.* FROM bpe21_metro as bpe, ", sorbonne_buffer, " AS sorbuff 
   WHERE ST_Within(bpe.geometry, sorbuff.geometry) and TYPEQU='F303';"
@@ -76,7 +154,7 @@ nrow(cinema_1km_sorbonne) # 21 cinémas dans un rayon de 1km (à vol d'oiseau)
 
 # Représentons tout cela sur une carte leaflet
 # On récupère une icone spécifique sur https://ionic.io/ionicons (mot clé film)
-cinemaIcons <- makeIcon(iconUrl = "tutos_R/postgis/film-sharp.png", 18,18)
+cinemaIcons <- makeIcon(iconUrl = "images/film-sharp.png", 18,18)
 
 leaflet() %>% 
   setView(lat = 48.84864, lng = 2.34297, zoom = 15) %>% 
@@ -88,33 +166,24 @@ leaflet() %>%
   addMarkers(data = cinema_1km_sorbonne %>% st_transform(4326), icon = cinemaIcons)
 #On peut vérifier que les infos bpe se superposent très bien aux infos OSM
 
-# Autre façon de répondre à la question
-# On récupère tous les cinémas de la bpe
-# Tout le filtrage géométrique on le fait avec sf sur R
-cinemas_bpe <- sf::st_read(conn, query = "SELECT * FROM bpe21_metro WHERE TYPEQU='F303';")
-str(cinemas_bpe)
-# buffer autour de la sorbonne
-sorbonne_buffer <- st_as_sf(data.frame(x=2.34297,y=48.84864), coords = c("x","y"), crs = 4326) %>% 
-  st_transform(2154) %>% 
-  st_buffer(1000)
 
-cinema_1km_sorbonne_list <- st_within(cinemas_bpe, sorbonne_buffer)
-str(cinema_1km_sorbonne_list)
-cinema_1km_sorbonne <- cinemas_bpe %>% filter(lengths(cinema_1km_sorbonne_list)>0)
-cinema_1km_sorbonne %>% nrow() #21 cinémas là encore
+# RQ: 1000m en LAMBERT-93 ce n'est pas exactement 1000m en WGS84 (zoomez sur la carte suivante)
+leaflet() %>%
+  setView(lat = 48.84864, lng = 2.34297, zoom = 15) %>%
+  addTiles() %>%
+  addCircles(
+    lat = 48.84864, lng = 2.34297, weight = 1, radius = 1000
+  ) %>%
+  addPolygons(data=sorbonne_buffer %>% st_transform(4326), col = "red")
+# Les 1000m en LAMBERT-93 ne sont pas exactement 1000m en WGS84 (1000m "réels")
+# On aurait pu donc projeter la bpe en wgs84 pour tenir compte de cet écart.
 
-# leaflet() %>% 
-#   setView(lat = 48.84864, lng = 2.34297, zoom = 15) %>% 
-#   addTiles() %>% 
-#   addCircles(
-#     lat = 48.84864, lng = 2.34297, weight = 1, radius = 1000
-#   ) %>% 
-#   addPolygons(data=sorbonne_buffer %>% st_transform(4326), col = "red")
 
 # c- On souhaite récupérer l'ensemble des boulodromes présents sur l'ensemble de la région PACA
 # Pour ce faire, nous n'utiliserons pas les informations sur les zonages administratifs disponibles
 # Nous utiliserons le polygône de la région PACA et la fonction ST_contains
 
+paca <- 
 
 
 # A- Densité de maternités en France métropolitaine

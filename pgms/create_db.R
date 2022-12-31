@@ -1,6 +1,5 @@
 library(DBI)
 library(RPostgres)
-library(Rpos)
 library(dplyr)
 library(dbplyr)
 library(sf)
@@ -104,11 +103,13 @@ purrr::walk2(
     
     query <- paste0(
       'CREATE TABLE ',nom_table,
-      '( id INT PRIMARY KEY,',
+      '( id INT PRIMARY KEY, ',
       types_vars,
       'geometry GEOMETRY(POINT, ', epsg,'));',
       collapse =''
     )
+    
+    conn <- connecter(user, password)
     
     sf::st_write(
       obj = sf_bpe21_doms[[reg]] %>% rename_with(tolower),
@@ -116,15 +117,25 @@ purrr::walk2(
       Id(table = nom_table),
       append = FALSE
     )
+    
+    # query <- paste0(
+    # "UPDATE geometry_columns 
+    # SET srid = ", epsg, ", type = 'POINT'
+    # WHERE f_table_name='",nom_table, "';")
+    # dbSendQuery(conn, query)
+    
+    dbDisconnect(conn)
   }
 )
+
+conn <- connecter(user, password)
 dbListTables(conn)
 
 bpe_head<- sf::st_read(conn, query = 'SELECT * FROM bpe21_04 LIMIT 10;')
 str(bpe_head)
 st_crs(bpe_head)
 
-dbDisconnect(conn)
+# dbDisconnect(conn)
 
 
 # Ajout d'une table communale
@@ -220,12 +231,37 @@ popnaiss_dep <- popnaiss_com %>%
 
 sf_reg_metro <- aws.s3::s3read_using(
   FUN = sf::st_read,
-  layer = "commune_francemetro_2021.shp",
-  drivers = "ESRI Shapefile",
   # Mettre les options de FUN ici
-  object = "/fonds/commune_francemetro_2021.shp",
+  object = "/fonds/reg_francemetro_2021.gpkg",
   bucket = "julienjamme",
   opts = list("region" = "")
 )
 sf_reg_metro %>% str()
+st_crs(sf_reg_metro)
 
+query <-
+  'CREATE TABLE regions_metro(
+  surf INTEGER,
+  code CHAR(2) PRIMARY KEY,
+  libelle VARCHAR(30),
+  geometry GEOMETRY(MULTIPOLYGON, 2154));'
+
+# Création de la table
+dbSendQuery(conn, query)
+dbListTables(conn)
+
+# Remplissage de la table
+# Remplissage avec la table metro
+sf::st_write(
+  obj = sf_reg_metro %>% rename_with(tolower),
+  dsn = conn,
+  Id(table = 'regions_metro'),
+  append = TRUE
+)
+
+st_read(conn, query = "SELECT * FROM regions_metro;") %>% st_geometry() %>% plot()
+
+
+# dbGetQuery(conn, "SELECT * FROM geometry_columns;")
+
+dbDisconnect(conn)
