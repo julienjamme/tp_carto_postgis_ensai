@@ -179,12 +179,66 @@ leaflet() %>%
 # On aurait pu donc projeter la bpe en wgs84 pour tenir compte de cet écart.
 
 
-# c- On souhaite récupérer l'ensemble des boulodromes présents sur l'ensemble de la région PACA
+# c- On souhaite récupérer l'ensemble des boulodromes (TYPEQU="F102") présents sur l'ensemble de la région PACA
 # Pour ce faire, nous n'utiliserons pas les informations sur les zonages administratifs disponibles
-# Nous utiliserons le polygône de la région PACA et la fonction ST_contains
+# Nous utiliserons le polygône de la région PACA (93) et la fonction st_contains
 
-paca <- 
+# 1ere façon: réaliser les opérations géométriques avec R grâce au package sf
+paca <- st_read(conn, query = "SELECT * FROM regions_metro WHERE code = '93';")
+plot(paca %>% st_geometry())
 
+boulodromes <- st_read(conn, query = "SELECT id, typequ, geometry FROM bpe21_metro WHERE typequ = 'F102';")
+str(boulodromes)
+
+boulodromes_paca_list <- st_contains(paca, boulodromes)
+boulodromes_paca <- boulodromes %>% slice(boulodromes_paca_list[[1]])
+
+plot(paca %>% st_geometry())
+plot(boulodromes_paca %>% st_geometry(), pch = 3, cex = 0.8, add = TRUE)
+
+# on peut vérifier le résultat en récupérant directement les boulodromes de PACA depuis la BPE
+# Si des différences existent, essayez de comprendre pourquoi.
+boulodromes_paca_bis <- st_read(conn, query = "SELECT id, typequ, dep, qualite_xy, geometry FROM bpe21_metro WHERE typequ = 'F102' and dep in ('04','05','06','13','83','84');")
+# les deux data n'ont pas le même nb d'observations (904 vs 910)
+diff <- boulodromes_paca_bis %>% mutate(version_bis = TRUE) %>% 
+  st_join(
+    boulodromes_paca %>% mutate(version_orig = TRUE) %>% select(-typequ), by = "id"
+  ) %>% 
+  filter((is.na(version_bis) | (is.na(version_orig))))
+
+# on réucpère 6 boulodromes supplémentaires:
+diff
+
+plot(paca %>% st_geometry())
+plot(boulodromes_paca %>% st_geometry(), pch = 3, cex = 0.8, add = TRUE)
+plot(diff %>% st_geometry(), col = "red", pch = 3, cex = 0.8, add = TRUE)
+
+# Pour deux d'entre eux, la géolocalisation de ces boulodromes est absurde car en pleine mer
+
+# Vérifions plus précisément les autres cas avec une carte leaflet
+
+leaflet() %>% 
+  setView(lat = 43.8741, lng = 6.0287, zoom = 8) %>% 
+  addTiles() %>% 
+  addMarkers(data = diff %>% st_transform(4326)) %>% 
+  addPolygons(data = paca %>% st_transform(4326), stroke = 1, color = "red")
+
+# On observe que (lecture d'ouest en est) 
+# - le polygône paca simplifie le tracé réel de la région => l'extrémité de la commune de Port-de-Bouc est hors du polygône, hors un boulodrome s'y trouve.
+# - les îles du Frioul ne sont pas incluses dans le polygône paca => 1 boulodrome est situé sur ces îles
+# - 3 boulodromes sont situés sur la mer (dont 1 est très éloigné)
+# - 1 dernier également en limite du polygône qui "oublie" une partie du territoire
+
+#=> insister sur la nécessaire simplication des polygones 
+#=> sur l'exercice de géolocalisation qui n'est pas parfait.
+
+# 2nde façon: réaliser le traitement géométrique avec POSTGIS et la fonction ST_contains
+query <- "SELECT bpe.* FROM bpe21_metro AS BPE, regions_metro AS regions
+WHERE ST_Contains(regions.geometry, bpe.geometry) and bpe.typequ='F102' and regions.code = '93';"
+
+boulodromes_paca <- st_read(conn, query = query)
+plot(boulodromes_paca %>% st_geometry())
+# Cette 2nde façon est à préférer pour des objets trop lourds à charger en mémoire.
 
 # A- Densité de maternités en France métropolitaine
 maternites_metro <- sf::st_read(conn, query = "SELECT * FROM bpe21_metro WHERE TYPEQU='D107';")
