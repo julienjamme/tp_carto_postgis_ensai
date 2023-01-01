@@ -1,0 +1,29 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgispersistence
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgis
+  template:
+    metadata:
+      labels:
+        app: postgis
+    spec:
+      volumes:
+        - name: volume
+          persistentVolumeClaim:
+            claimName: espace-postgis
+
+      containers:
+        - name: postgis
+          image: kartoza/postgis
+          envFrom:
+            - configMapRef:
+                name: postgis-config
+          volumeMounts:
+            - mountPath: /docker-entrypoint-initdb.db
+              name: volume        
