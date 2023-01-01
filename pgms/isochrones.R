@@ -22,6 +22,11 @@ connecter <- function(user, password){
 conn <- connecter(user, password)
 
 dbListTables(conn) # liste des tables présentes dans la bdd (certaines sont des tables gérées par le SGBD)
+# - bpe21_metro : (geodata) BPE 2021 pour la france métro: https://www.insee.fr/fr/statistiques/3568638?sommaire=3568656
+# - bpe21_XX : (geodata) La même pour chaque DOM (01, 02, 03, 04)
+# - regions_metro : (geodata) Polygones des régions de métropole
+# - popnaiss_com : (data) population communale 2018 + naissances 2018 (précision: données à l'arrondissemnt municipal pour PLM)
+
 dbListFields(conn, "bpe21_metro") # les colonnes de la table bpe21_metro
 
 # Pour interagir avec la base il suffit d'envoyer des requêtes SQL

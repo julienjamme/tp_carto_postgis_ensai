@@ -159,26 +159,26 @@ naisscom %>% filter(CODGEO == "13055")
 naisscom %>% filter(CODGEO == "69123")
 # Répartition des naissances communales dans les arrondissements municipaux au prorata des naissances déjà observées
 
-naiss_paris <- naisscom %>% filter(CODGEO == "75056") %>% pull(NAISD21)
+naiss_paris <- naisscom %>% filter(CODGEO == "75056") %>% pull(NAISD18)
 paris_ratio <- naisscom %>% 
   filter(substr(CODGEO,1,3) == 751) %>% 
-  select(CODGEO, NAISD21) %>% 
-  mutate(ratio = NAISD21/sum(NAISD21)) %>% 
-  mutate(NAISD21_ADD = naiss_paris*ratio)
+  select(CODGEO, NAISD18) %>% 
+  mutate(ratio = NAISD18/sum(NAISD18)) %>% 
+  mutate(NAISD18_ADD = naiss_paris*ratio)
 
-naiss_mars <- naisscom %>% filter(CODGEO == "13055") %>% pull(NAISD21)
+naiss_mars <- naisscom %>% filter(CODGEO == "13055") %>% pull(NAISD18)
 mars_ratio <- naisscom %>% 
   filter(substr(CODGEO,1,3) == 132) %>% 
-  select(CODGEO, NAISD21) %>% 
-  mutate(ratio = NAISD21/sum(NAISD21)) %>% 
-  mutate(NAISD21_ADD = naiss_mars*ratio)
+  select(CODGEO, NAISD18) %>% 
+  mutate(ratio = NAISD18/sum(NAISD18)) %>% 
+  mutate(NAISD18_ADD = naiss_mars*ratio)
 
-naiss_lyon <- naisscom %>% filter(CODGEO == "69123") %>% pull(NAISD21)
+naiss_lyon <- naisscom %>% filter(CODGEO == "69123") %>% pull(NAISD18)
 lyon_ratio <- naisscom %>% 
   filter(substr(CODGEO,1,4) == 6938) %>% 
-  select(CODGEO, NAISD21) %>% 
-  mutate(ratio = NAISD21/sum(NAISD21)) %>% 
-  mutate(NAISD21_ADD = naiss_lyon*ratio)
+  select(CODGEO, NAISD18) %>% 
+  mutate(ratio = NAISD18/sum(NAISD18)) %>% 
+  mutate(NAISD18_ADD = naiss_lyon*ratio)
 
 popnaiss_com <- popcom %>% 
   group_by(CODGEO) %>%
@@ -209,24 +209,29 @@ popnaiss_com <- popcom %>%
       full_join(
         bind_rows(bind_rows(paris_ratio, mars_ratio), lyon_ratio)
       ) %>% 
-      tidyr::replace_na(list(NAISD21_ADD = 0)) %>% 
-      mutate(NAISD21_AJ = NAISD21 + NAISD21_ADD) %>% 
-      select(CODGEO, NAISD21_AJ), 
+      tidyr::replace_na(list(NAISD18_ADD = 0)) %>% 
+      mutate(NAISD18_AJ = NAISD18 + NAISD18_ADD) %>% 
+      select(CODGEO, NAISD18_AJ), 
     by = "CODGEO"
   ) %>% 
   filter(! CODGEO %in% c("75056","13055","69123")) %>% 
   filter(substr(CODGEO,1,2) < 97) %>% 
-  filter(!is.na(NAISD21_AJ)) # pb coherence geo entre les deux tables (10 communes concernées)
+  filter(!is.na(NAISD18_AJ)) # pb coherence geo entre les deux tables (11 communes concernées)
 
-# données départementales
-popnaiss_dep <- popnaiss_com %>% 
-  mutate(DEP = substr(CODGEO,1,2)) %>% 
-  group_by(DEP) %>% 
-  summarise(across(where(is.numeric), sum))
+dbWriteTable(conn, "popnaiss_com", popnaiss_com, row.names=F)
+dbListTables(conn)
+
+poptest <- dbGetQuery(conn, "SELECT * FROM popnaiss_com LIMIT 10;")
+str(poptest)
+
+# # données départementales
+# popnaiss_dep <- popnaiss_com %>% 
+#   mutate(DEP = substr(CODGEO,1,2)) %>% 
+#   group_by(DEP) %>% 
+#   summarise(across(where(is.numeric), sum))
 
 
 # Ajout de fonds de polygones
-
 # Recupération sur Minio
 
 sf_reg_metro <- aws.s3::s3read_using(
